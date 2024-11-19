@@ -5,7 +5,7 @@ from torch.utils.data import Dataset, DataLoader
 from torchvision import transforms
 from PIL import Image
 import numpy as np
-from model import VoNet  # Import mô hình từ file đã lưu
+from car_direction_ditection import VoNet  # Import mô hình từ file đã lưu
 
 # Thông số cấu hình
 DATASET_DIR = '8_huong_2/test'
