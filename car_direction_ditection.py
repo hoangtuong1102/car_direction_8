@@ -8,19 +8,15 @@ from torch import optim
 from PIL import Image
 from torch.utils.data import Dataset, DataLoader
 import matplotlib.pyplot as plt
+from tqdm import tqdm  # Hiển thị tiến trình
 
 # Thông số cấu hình
-DATASET_DIR = '8_huong_2/train'
+TRAIN_DIR = '8_huong_2/train'
+VALID_DIR = '8_huong_2/valid'
 BATCH_SIZE = 4
 EPOCHS = 50
 number_of_label = 8  # Số lớp (số góc định nghĩa)
 OUTPUT_FEATURES = 2  # Đầu ra là (cos θ, sin θ)
-
-# Đường dẫn dữ liệu
-TESTDATASET_DIR_IMG = os.path.join(DATASET_DIR, 'images/')
-TESTDATASET_DIR_LBL = os.path.join(DATASET_DIR, 'labels/')
-IMG_TESTDATASET_PATH_IMG = sorted(glob.glob(f'{TESTDATASET_DIR_IMG}*.jpg'))
-IMG_TESTDATASET_PATH_LBL = sorted(glob.glob(f'{TESTDATASET_DIR_LBL}*.txt'))
 
 # Hàm kiểm tra CUDA
 device = torch.device('cuda:0' if torch.cuda.is_available() else 'cpu')
@@ -135,68 +131,77 @@ transform = transforms.Compose([
     transforms.ToTensor()
 ])
 
-# Chuẩn bị DataLoader
-dataset = DirectionDataset(IMG_TESTDATASET_PATH_IMG, IMG_TESTDATASET_PATH_LBL, transform)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+# Dữ liệu train và valid
+train_img_paths = sorted(glob.glob(f'{TRAIN_DIR}/images/*.jpg'))
+train_lbl_paths = sorted(glob.glob(f'{TRAIN_DIR}/labels/*.txt'))
+valid_img_paths = sorted(glob.glob(f'{VALID_DIR}/images/*.jpg'))
+valid_lbl_paths = sorted(glob.glob(f'{VALID_DIR}/labels/*.txt'))
+
+train_dataset = DirectionDataset(train_img_paths, train_lbl_paths, transform)
+valid_dataset = DirectionDataset(valid_img_paths, valid_lbl_paths, transform)
+
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+valid_loader = DataLoader(valid_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+# Hàm đánh giá
+def validate_model(model, dataloader):
+    model.eval()
+    total_loss = 0
+    criterion = nn.SmoothL1Loss()
+    with torch.no_grad():
+        for images, labels, bboxes in dataloader:
+            images, labels, bboxes = images.to(device), labels.to(device), bboxes.to(device)
+            predictions = model(images, bboxes)
+            loss = criterion(predictions, labels)
+            total_loss += loss.item()
+    return total_loss / len(dataloader)
 
 # Hàm huấn luyện
-from tqdm import tqdm  # Import thư viện hiển thị tiến trình
-
-# Hàm huấn luyện
-def train_model(model, dataloader, epochs=EPOCHS, lr=0.001, save_path="trained_model.pth"):
+def train_model(model, train_loader, valid_loader, epochs=EPOCHS, lr=0.001, save_path="trained_model.pth"):
     model.to(device)
-    model.train()
     optimizer = optim.Adam(model.parameters(), lr=lr)
     criterion = nn.SmoothL1Loss()
+    train_losses, valid_losses = [], []
     
-    losses = []
     for epoch in range(epochs):
         print(f"\nEpoch {epoch + 1}/{epochs}")
+        model.train()
         epoch_loss = 0.0
 
-        # Hiển thị tiến trình batch bằng tqdm
-        for batch_idx, (images, labels, bboxes) in enumerate(tqdm(dataloader, desc=f"Training Epoch {epoch + 1}")):
+        for images, labels, bboxes in tqdm(train_loader, desc="Training"):
             images, labels, bboxes = images.to(device), labels.to(device), bboxes.to(device)
             
-            # Reset gradient
             optimizer.zero_grad()
-            
-            # Forward pass
             predictions = model(images, bboxes)
-            
-            # Tính loss
             loss = criterion(predictions, labels)
-            
-            # Backward pass
             loss.backward()
-            
-            # Cập nhật trọng số
             optimizer.step()
-            
-            # Cộng dồn loss
             epoch_loss += loss.item()
-            
-            # Hiển thị thông tin batch
-            if (batch_idx + 1) % 10 == 0:  # Hiển thị mỗi 10 batch
-                print(f"  Batch {batch_idx + 1}/{len(dataloader)} - Loss: {loss.item():.6f}")
+        
+        epoch_loss /= len(train_loader)
+        train_losses.append(epoch_loss)
+        print(f"Training Loss: {epoch_loss:.6f}")
 
-        # Tính loss trung bình cho mỗi epoch
-        epoch_loss /= len(dataloader)
-        losses.append(epoch_loss)
-        print(f"Epoch {epoch + 1} Loss: {epoch_loss:.6f}")
+        # Validation
+        valid_loss = validate_model(model, valid_loader)
+        valid_losses.append(valid_loss)
+        print(f"Validation Loss: {valid_loss:.6f}")
     
-    # Lưu mô hình sau khi huấn luyện
+    # Lưu mô hình
     torch.save(model.state_dict(), save_path)
-    print(f"\nModel saved to {save_path}")
-    return losses
+    print(f"Model saved to {save_path}")
+    return train_losses, valid_losses
 
 # Khởi tạo và huấn luyện mô hình
 model = VoNet()
-losses = train_model(model, dataloader, epochs=EPOCHS, lr=0.0001, save_path="vonet_trained.pth")
+train_losses, valid_losses = train_model(model, train_loader, valid_loader, epochs=EPOCHS, lr=0.0001, save_path="vonet_trained.pth")
 
 # Vẽ đồ thị mất mát
-plt.plot(range(len(losses)), losses)
+plt.plot(range(EPOCHS), train_losses, label="Training Loss")
+plt.plot(range(EPOCHS), valid_losses, label="Validation Loss")
 plt.xlabel('Epoch')
 plt.ylabel('Loss')
-plt.title('Training Loss')
+plt.title('Training and Validation Loss')
+plt.legend()
+plt.savefig('Training_and_Validation_Loss.png')
 plt.show()
